@@ -1,0 +1,10 @@
+
+echo \# TEST 02. Redirection input test
+
+echo Hello Tiny Shell ! > file2
+wc -l file2
+wc -l < file2
+cat file2
+rm file2
+
+echo \# TEST 02 end

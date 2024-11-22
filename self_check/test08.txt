@@ -1,0 +1,6 @@
+
+echo \# TEST 08. Multiple slow pipe and output redirection test
+
+./tools/myprod 9 | sort -rn | wc -l > result8
+
+echo \# TEST 08 end

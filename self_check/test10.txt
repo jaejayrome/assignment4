@@ -1,0 +1,7 @@
+
+echo \# TEST 10. Interrupt on multiple process test
+
+./tools/myprod 9 | sort -rn
+Ctrl + c
+
+echo \# TEST 10 end

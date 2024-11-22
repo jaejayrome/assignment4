@@ -1,0 +1,6 @@
+
+echo\# TEST 11. Background execution of single process test
+
+./tools/myspin 4 &
+
+echo \# TEST 11 end

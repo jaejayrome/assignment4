@@ -1,0 +1,8 @@
+
+echo \# TEST 01. Redirection output test
+
+echo Hello Tiny Shell ! > file1
+cat file1
+rm file1
+
+echo \# TEST 01 end

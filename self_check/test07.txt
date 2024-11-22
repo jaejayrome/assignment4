@@ -1,0 +1,6 @@
+
+echo \# TEST 07. Slow pipeline test
+
+./tools/myprod 9 | sort -rn
+
+echo \# TEST 07 end

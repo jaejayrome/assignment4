@@ -1,0 +1,8 @@
+
+echo \# TEST 04. Single pipeline test
+
+touch hello1 hello2 hello9
+ls | grep hello
+rm hello1 hello2 hello9
+
+echo \# TEST 04 end

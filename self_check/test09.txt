@@ -1,0 +1,7 @@
+
+echo \# TEST 09. Interrupt on single process test
+
+./tools/myprod 9
+Ctrl + c
+
+echo \# TEST 09 end

@@ -1,0 +1,8 @@
+
+echo \# TEST 03. Finding execution file test
+
+/bin/echo Hello Tiny Shell ! > file3
+/bin/cat file3
+/bin/rm file3
+
+echo \# TEST 03 end

@@ -1,0 +1,9 @@
+
+echo \# TEST 06. Multiple pipelines and output redirection test
+
+touch hello1 hello2 hello9
+ls | grep hello | sort -r > result6
+cat result6
+rm hello1 hello2 hello9 result6
+
+echo \# TEST 06 end
