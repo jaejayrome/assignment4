@@ -29,4 +29,11 @@ void execute_builtin(DynArray_T oTokens, enum BuiltinType btype);
 int fork_exec(DynArray_T oTokens, int is_background);
 int iter_pipe_fork_exec(int pCount, DynArray_T oTokens, int is_background);
 
+struct RedirectionInfo {
+    char *outfile;  // Output redirection filename
+    char *infile;   // Input redirection filename
+    int has_output_redirection;
+    int has_input_redirection;
+};
+
 #endif /* _EXEUCTE_H_ */
