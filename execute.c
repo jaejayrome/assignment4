@@ -225,7 +225,6 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 	char *args[MAX_LINE_SIZE];
 	int cmd_count = pcount + 1; // Number of commands is pipe count + 1
 	int token_idx = 0;
-	int current_pipe = 0;
 
 	// Iterate through all commands in the pipeline
 	for (i = 0; i < cmd_count; i++)
