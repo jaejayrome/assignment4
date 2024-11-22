@@ -15,3 +15,9 @@ $(TARGET): $(OBJS)
 clean :
 	rm -f $(OBJS) $(TARGET)
 	$(foreach dir, $(SUBDIRS), $(MAKE) -C $(dir) clean;)
+
+upload:
+	sshpass -p 'C^JvZP.J39' scp  -r -P 2222 ./ sp202481390@sp04.snucse.org:~/assignment4
+
+enter:
+	sshpass -p 'C^JvZP.J39' ssh sp202481390@sp04.snucse.org -p 2222

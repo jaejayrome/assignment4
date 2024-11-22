@@ -27,7 +27,6 @@
 #define MAX_BG_PRO 16
 #define MAX_FG_PRO 16
 
-
 /*
         //
         // TODO-start: data structures in snush.h
@@ -40,5 +39,26 @@
         // TODO-end: data structures in snush.h
         //
 */
+
+struct BgProcess
+{
+        pid_t pid;         // Process ID
+        pid_t pgid;        // Process group ID
+        int status;        // Process status
+        time_t start_time; // When the process started
+        char *cmd;         // Command string
+};
+
+// Array to store background processes
+struct BgProcessList
+{
+        struct BgProcess processes[MAX_BG_PRO];
+        int count; // Number of active background processes
+};
+
+// Macros for background process management
+#define BG_PROCESS_DONE 1
+#define BG_PROCESS_RUNNING 0
+#define BG_PROCESS_ERROR -1
 
 #endif /* _SNUSH_H_ */
