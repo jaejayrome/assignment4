@@ -20,6 +20,9 @@
 #include "util.h"
 #include "snush.h"
 
+#define B_JOBS 2
+
+void print_jobs(void);
 void redout_handler(char *fname);
 void redin_handler(char *fname);
 struct CommandInfo

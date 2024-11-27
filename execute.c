@@ -12,6 +12,8 @@
 #include <termios.h>
 
 extern int total_bg_cnt;
+extern struct BgProcessList bg_list;
+extern int total_bg_cnt;
 /*---------------------------------------------------------------------------*/
 void redout_handler(char *fname)
 {
@@ -199,7 +201,6 @@ int fork_exec(DynArray_T oTokens, int is_background)
 	int status;
 	struct CommandInfo cmd = {0};
 
-	// Just collect command info, don't execute redirection yet
 	if (build_command_partial(oTokens, 0, dynarray_get_length(oTokens), &cmd) < 0)
 	{
 		error_print("Memory allocation failed", FPRINTF);
@@ -217,8 +218,8 @@ int fork_exec(DynArray_T oTokens, int is_background)
 	if (pid == 0)
 	{ // Child process
 		signal(SIGINT, SIG_DFL);
+		setpgid(0, 0); // Create new process group
 
-		// Handle redirection only in child process
 		if (cmd.redirect_out != NULL)
 		{
 			int fd = open(cmd.redirect_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -238,14 +239,13 @@ int fork_exec(DynArray_T oTokens, int is_background)
 			close(fd);
 		}
 
-		// Execute command
 		execvp(cmd.args[0], cmd.args);
 		error_print(NULL, PERROR);
 		free(cmd.args);
 		exit(EXIT_FAILURE);
 	}
 	else
-	{ // Parent process
+	{ // Parent process in fork_exec()
 		if (!is_background)
 		{
 			if (waitpid(pid, &status, 0) < 0)
@@ -258,6 +258,17 @@ int fork_exec(DynArray_T oTokens, int is_background)
 		else
 		{
 			setpgid(pid, pid);
+			// Add to background process list
+			if (bg_list.count < MAX_BG_PRO)
+			{
+				bg_list.processes[bg_list.count].pid = pid;
+				bg_list.processes[bg_list.count].pgid = pid;
+				bg_list.processes[bg_list.count].status = BG_PROCESS_RUNNING;
+				// Save command string
+				bg_list.processes[bg_list.count].cmd = strdup(cmd.args[0]);
+				bg_list.count++;
+				total_bg_cnt++;
+			}
 		}
 		free(cmd.args);
 		return pid;
@@ -432,3 +443,19 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 	return first_child_pid;
 }
 /*---------------------------------------------------------------------------*/
+void print_jobs(void)
+{
+	for (int i = 0; i < bg_list.count; i++)
+	{
+		if (bg_list.processes[i].status == BG_PROCESS_RUNNING)
+		{
+			// Check if process still exists
+			if (kill(bg_list.processes[i].pid, 0) == 0)
+			{
+				printf("[%d] Running\t%s\n",
+					   bg_list.processes[i].pid,
+					   bg_list.processes[i].cmd);
+			}
+		}
+	}
+}

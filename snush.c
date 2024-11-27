@@ -76,37 +76,40 @@ void check_bg_status()
 static void sigzombie_handler(int signo)
 {
     pid_t pid;
-    int stat;
+    int status;
 
     if (signo == SIGCHLD)
     {
-
-        while ((pid = waitpid(-1, &stat, WNOHANG)) > 0)
+        while ((pid = waitpid(-1, &status, WNOHANG)) > 0)
         {
-            //
-            // TODO-start: sigzombie_handler() in snush.c start
-            //
             for (int i = 0; i < bg_list.count; i++)
             {
                 if (bg_list.processes[i].pid == pid)
                 {
-                    bg_list.processes[i].status = BG_PROCESS_DONE;
-                    bg_messages_pending++;
+                    if (WIFEXITED(status) || WIFSIGNALED(status))
+                    {
+                        // Process has terminated
+                        printf("[%d] Done\t%s\n",
+                               bg_list.processes[i].pid,
+                               bg_list.processes[i].cmd);
+
+                        // Clean up
+                        free(bg_list.processes[i].cmd);
+
+                        // Remove from list by shifting remaining entries
+                        for (int j = i; j < bg_list.count - 1; j++)
+                        {
+                            bg_list.processes[j] = bg_list.processes[j + 1];
+                        }
+                        bg_list.count--;
+                        if (total_bg_cnt > 0)
+                            total_bg_cnt--;
+                    }
                     break;
                 }
             }
-            //
-            // TODO-end: sigzombie_handler() in snush.c end
-            //
-        }
-
-        if (pid < 0 && errno != ECHILD && errno != EINTR)
-        {
-            perror("waitpid");
         }
     }
-
-    return;
 }
 /*---------------------------------------------------------------------------*/
 static void shell_helper(const char *in_line)

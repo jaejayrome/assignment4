@@ -15,10 +15,25 @@
 #include "token.h"
 #include "dynarray.h"
 
-enum {FALSE, TRUE};
+enum
+{
+    FALSE,
+    TRUE
+};
 
-enum BuiltinType {NORMAL, B_EXIT, B_CD};
-enum PrintMode {SETUP, PERROR, FPRINTF};
+enum BuiltinType
+{
+    NORMAL,
+    B_EXIT,
+    B_CD,
+    B_JOBS
+};
+enum PrintMode
+{
+    SETUP,
+    PERROR,
+    FPRINTF
+};
 
 void error_print(char *input, enum PrintMode mode);
 enum BuiltinType check_builtin(struct Token *t);

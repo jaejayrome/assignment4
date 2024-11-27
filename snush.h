@@ -26,6 +26,7 @@
 
 #define MAX_BG_PRO 16
 #define MAX_FG_PRO 16
+extern int total_bg_cnt;
 
 /*
         //
@@ -42,11 +43,10 @@
 
 struct BgProcess
 {
-        pid_t pid;         // Process ID
-        pid_t pgid;        // Process group ID
-        int status;        // Process status
-        time_t start_time; // When the process started
-        char *cmd;         // Command string
+        pid_t pid;  // Process ID
+        pid_t pgid; // Process group ID
+        char *cmd;  // Command string for jobs display
+        int status; // Process status
 };
 
 // Array to store background processes
@@ -55,6 +55,8 @@ struct BgProcessList
         struct BgProcess processes[MAX_BG_PRO];
         int count; // Number of active background processes
 };
+
+extern struct BgProcessList bg_list;
 
 // Macros for background process management
 #define BG_PROCESS_DONE 1
