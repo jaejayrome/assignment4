@@ -9,6 +9,7 @@
 #include "lexsyn.h"
 #include "snush.h"
 #include "execute.h"
+#include <termios.h>
 
 extern int total_bg_cnt;
 /*---------------------------------------------------------------------------*/
@@ -276,12 +277,16 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 	int cmd_count = pcount + 1;
 	int token_idx = 0;
 	int pgid = -1;
-	pid_t child_pids[MAX_FG_PRO]; // Store all child PIDs
+	pid_t child_pids[MAX_FG_PRO];
 
-	// Iterate through all commands in the pipeline
+	// Block SIGTTOU while setting up terminal control
+	sigset_t mask, old_mask;
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGTTOU);
+	sigprocmask(SIG_BLOCK, &mask, &old_mask);
+
 	for (i = 0; i < cmd_count; i++)
 	{
-		// Find start and end of current command
 		token_start = token_idx;
 		while (token_idx < dynarray_get_length(oTokens))
 		{
@@ -291,70 +296,71 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 			token_idx++;
 		}
 		token_end = token_idx;
-		token_idx++; // Skip the pipe token
+		token_idx++;
 
-		// Create pipe for all except last command
 		if (i < cmd_count - 1)
 		{
 			if (pipe(pipe_fds) < 0)
 			{
 				error_print(NULL, PERROR);
-				// Clean up previously created children
 				for (int j = 0; j < i; j++)
 				{
 					kill(child_pids[j], SIGTERM);
 				}
+				sigprocmask(SIG_SETMASK, &old_mask, NULL);
 				return -1;
 			}
 		}
 
-		// Fork new process
 		pid = fork();
 
 		if (pid < 0)
 		{
 			error_print(NULL, PERROR);
-			// Clean up
 			for (int j = 0; j < i; j++)
 			{
 				kill(child_pids[j], SIGTERM);
 			}
+			sigprocmask(SIG_SETMASK, &old_mask, NULL);
 			return -1;
 		}
 
 		if (pid == 0)
 		{ // Child process
-			signal(SIGINT, SIG_DFL);
+			// Restore original signal mask in child
+			sigprocmask(SIG_SETMASK, &old_mask, NULL);
 
-			// Set up process group
+			// Reset signal handlers
+			signal(SIGINT, SIG_DFL);
+			signal(SIGQUIT, SIG_DFL);
+			signal(SIGTSTP, SIG_DFL);
+			signal(SIGTTIN, SIG_DFL);
+			signal(SIGTTOU, SIG_DFL);
+
 			if (pgid == -1)
 			{
 				pgid = getpid();
 			}
 			setpgid(0, pgid);
 
-			// Handle input from previous pipe
 			if (prev_pipe_read != -1)
 			{
 				dup2(prev_pipe_read, STDIN_FILENO);
 				close(prev_pipe_read);
 			}
 
-			// Handle output to next pipe
 			if (i < cmd_count - 1)
 			{
-				close(pipe_fds[0]); // Close read end
+				close(pipe_fds[0]);
 				dup2(pipe_fds[1], STDOUT_FILENO);
 				close(pipe_fds[1]);
 			}
 
-			// Close all unnecessary file descriptors
 			for (int j = 3; j < 256; j++)
 			{
 				close(j);
 			}
 
-			// Build and execute command using new CommandInfo structure
 			struct CommandInfo cmd = {0};
 			if (build_command_partial(oTokens, token_start, token_end, &cmd) < 0)
 			{
@@ -362,28 +368,28 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 				exit(EXIT_FAILURE);
 			}
 
-			// Execute command
 			execvp(cmd.args[0], cmd.args);
-
-			// If execvp returns, it must have failed
-			free(cmd.args); // Clean up before error
+			free(cmd.args);
 			error_print(NULL, PERROR);
 			exit(EXIT_FAILURE);
 		}
 		else
 		{ // Parent process
-			// Store PID
 			child_pids[i] = pid;
 
-			// Set up process group
 			if (pgid == -1)
 			{
 				pgid = pid;
-				first_child_pid = pid; // Store first child's PID
+				first_child_pid = pid;
 			}
 			setpgid(pid, pgid);
 
-			// Close unused pipe ends
+			if (!is_background && i == 0)
+			{
+				// Set process group as foreground
+				tcsetpgrp(STDIN_FILENO, pgid);
+			}
+
 			if (prev_pipe_read != -1)
 			{
 				close(prev_pipe_read);
@@ -397,7 +403,6 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 		}
 	}
 
-	// Parent process waiting
 	if (!is_background)
 	{
 		int status;
@@ -407,19 +412,23 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 			if (waited_pid < 0)
 			{
 				if (errno != ECHILD)
-				{ // Ignore "No child processes" error
+				{
 					error_print(NULL, PERROR);
+					sigprocmask(SIG_SETMASK, &old_mask, NULL);
 					return -1;
 				}
 			}
 		}
+		// Return terminal control to shell
+		tcsetpgrp(STDIN_FILENO, getpgrp());
 	}
 	else
 	{
-		// For background processes, increment counter
 		total_bg_cnt += cmd_count;
 	}
 
+	// Restore original signal mask
+	sigprocmask(SIG_SETMASK, &old_mask, NULL);
 	return first_child_pid;
 }
 /*---------------------------------------------------------------------------*/
