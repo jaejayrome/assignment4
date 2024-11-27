@@ -10,10 +10,11 @@
 #include "snush.h"
 #include "execute.h"
 
-extern int total_bg_cnt; 
+extern int total_bg_cnt;
 /*---------------------------------------------------------------------------*/
 void redout_handler(char *fname)
 {
+	printf("DEBUG: Starting redout_handler for %s\n", fname); // Add this
 	int fd;
 
 	fd = open(fname, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -24,10 +25,11 @@ void redout_handler(char *fname)
 	}
 	else
 	{
-		// Redirect stdout to the file
+		printf("DEBUG: Redirecting stdout to file\n"); // Add this
 		dup2(fd, STDOUT_FILENO);
 		close(fd);
 	}
+	printf("DEBUG: Finished redout_handler\n"); // Add this
 }
 /*---------------------------------------------------------------------------*/
 void redin_handler(char *fname)
@@ -47,57 +49,86 @@ void redin_handler(char *fname)
 	}
 }
 /*---------------------------------------------------------------------------*/
-int build_command_partial(DynArray_T oTokens, int start,
-						  int end, char *args[])
+
+int build_command_partial(DynArray_T oTokens, int start, int end, struct CommandInfo *cmd)
 {
-	int i, ret = 0, redin = FALSE, redout = FALSE, cnt = 0;
+	int i, redout = FALSE; // Removed unused redin variable
 	struct Token *t;
 
-	/* Build command */
+	cmd->cnt = 0;
+	cmd->redirect_out = NULL;
+
+	// First pass to count arguments
+	int arg_count = 0;
 	for (i = start; i < end; i++)
 	{
+		t = dynarray_get(oTokens, i);
+		if (t->token_type == TOKEN_WORD)
+		{
+			if (!(redout == TRUE))
+			{
+				arg_count++;
+			}
+			redout = FALSE;
+		}
+		else if (t->token_type == TOKEN_REDOUT)
+		{
+			redout = TRUE;
+		}
+	}
 
+	// Allocate space for arguments plus NULL terminator
+	cmd->args = malloc(sizeof(char *) * (arg_count + 1));
+	if (cmd->args == NULL)
+	{
+		return -1;
+	}
+
+	// Reset flags for second pass
+	redout = FALSE;
+
+	// Second pass to fill in arguments
+	for (i = start; i < end; i++)
+	{
 		t = dynarray_get(oTokens, i);
 
 		if (t->token_type == TOKEN_WORD)
 		{
-			if (redin == TRUE)
+			if (redout == TRUE)
 			{
-				redin_handler(t->token_value);
-				redin = FALSE;
-			}
-			else if (redout == TRUE)
-			{
-				redout_handler(t->token_value);
+				cmd->redirect_out = t->token_value;
 				redout = FALSE;
 			}
 			else
-				args[cnt++] = t->token_value;
+			{
+				cmd->args[cmd->cnt++] = t->token_value;
+			}
 		}
-		else if (t->token_type == TOKEN_REDIN)
-			redin = TRUE;
 		else if (t->token_type == TOKEN_REDOUT)
+		{
 			redout = TRUE;
+		}
 	}
-	args[cnt] = NULL;
-
-#ifdef DEBUG
-	for (i = 0; i < cnt; i++)
-	{
-		if (args[i] == NULL)
-			printf("CMD: NULL\n");
-		else
-			printf("CMD: %s\n", args[i]);
-	}
-	printf("END\n");
-#endif
-	return ret;
+	cmd->args[cmd->cnt] = NULL;
+	return 0;
 }
 /*---------------------------------------------------------------------------*/
 int build_command(DynArray_T oTokens, char *args[])
 {
-	return build_command_partial(oTokens, 0,
-								 dynarray_get_length(oTokens), args);
+	struct CommandInfo cmd = {0};
+	int ret = build_command_partial(oTokens, 0, dynarray_get_length(oTokens), &cmd);
+
+	if (ret == 0)
+	{
+		// Copy arguments to the provided array
+		for (int i = 0; i <= cmd.cnt; i++)
+		{ // Include NULL terminator
+			args[i] = cmd.args[i];
+		}
+		free(cmd.args); // Free the temporary array
+	}
+
+	return ret;
 }
 /*---------------------------------------------------------------------------*/
 void execute_builtin(DynArray_T oTokens, enum BuiltinType btype)
@@ -165,49 +196,70 @@ int fork_exec(DynArray_T oTokens, int is_background)
 {
 	pid_t pid;
 	int status;
-	char *args[MAX_LINE_SIZE];
+	struct CommandInfo cmd = {0};
 
-	// Build command array from tokens
-	build_command(oTokens, args);
+	// Just collect command info, don't execute redirection yet
+	if (build_command_partial(oTokens, 0, dynarray_get_length(oTokens), &cmd) < 0)
+	{
+		error_print("Memory allocation failed", FPRINTF);
+		return -1;
+	}
 
 	pid = fork();
-
 	if (pid < 0)
 	{
+		free(cmd.args);
 		error_print(NULL, PERROR);
 		return -1;
 	}
 
 	if (pid == 0)
 	{ // Child process
-		// Reset signal handling for child
 		signal(SIGINT, SIG_DFL);
 
-		// Execute command (build_command handles the redirection)
-		execvp(args[0], args);
+		// Handle redirection only in child process
+		if (cmd.redirect_out != NULL)
+		{
+			int fd = open(cmd.redirect_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			if (fd < 0)
+			{
+				error_print(NULL, PERROR);
+				free(cmd.args);
+				exit(EXIT_FAILURE);
+			}
+			if (dup2(fd, STDOUT_FILENO) < 0)
+			{
+				error_print(NULL, PERROR);
+				close(fd);
+				free(cmd.args);
+				exit(EXIT_FAILURE);
+			}
+			close(fd);
+		}
 
-		// If execvp returns, it must have failed
+		// Execute command
+		execvp(cmd.args[0], cmd.args);
 		error_print(NULL, PERROR);
+		free(cmd.args);
 		exit(EXIT_FAILURE);
 	}
 	else
 	{ // Parent process
 		if (!is_background)
 		{
-			// Wait for foreground process
 			if (waitpid(pid, &status, 0) < 0)
 			{
 				error_print(NULL, PERROR);
+				free(cmd.args);
 				return -1;
 			}
-			return pid;
 		}
 		else
 		{
-			// For background process, set process group
 			setpgid(pid, pid);
-			return pid;
 		}
+		free(cmd.args);
+		return pid;
 	}
 	return -1;
 }
@@ -221,7 +273,6 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 	int pipe_fds[2];
 	int prev_pipe_read = -1;
 	pid_t pid, first_child_pid = -1;
-	char *args[MAX_LINE_SIZE];
 	int cmd_count = pcount + 1;
 	int token_idx = 0;
 	int pgid = -1;
@@ -303,10 +354,19 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 				close(j);
 			}
 
-			// Build and execute command
-			build_command_partial(oTokens, token_start, token_end, args);
-			execvp(args[0], args);
+			// Build and execute command using new CommandInfo structure
+			struct CommandInfo cmd = {0};
+			if (build_command_partial(oTokens, token_start, token_end, &cmd) < 0)
+			{
+				error_print("Command building failed", FPRINTF);
+				exit(EXIT_FAILURE);
+			}
 
+			// Execute command
+			execvp(cmd.args[0], cmd.args);
+
+			// If execvp returns, it must have failed
+			free(cmd.args); // Clean up before error
 			error_print(NULL, PERROR);
 			exit(EXIT_FAILURE);
 		}
