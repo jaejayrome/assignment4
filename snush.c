@@ -169,9 +169,7 @@ static void shell_helper(const char *in_line)
                 {
                     if (total_bg_cnt + pcount + 1 > MAX_BG_PRO)
                     {
-                        printf("Error: Total background processes "
-                               "exceed the limit (%d).\n",
-                               MAX_BG_PRO);
+                        printf("Program exceeds the maximum number of the background processes\n");
                         return;
                     }
                 }
