@@ -17,7 +17,6 @@ extern int total_bg_cnt;
 /*---------------------------------------------------------------------------*/
 void redout_handler(char *fname)
 {
-	printf("DEBUG: Starting redout_handler for %s\n", fname); // Add this
 	int fd;
 
 	fd = open(fname, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -28,11 +27,9 @@ void redout_handler(char *fname)
 	}
 	else
 	{
-		printf("DEBUG: Redirecting stdout to file\n"); // Add this
 		dup2(fd, STDOUT_FILENO);
 		close(fd);
 	}
-	printf("DEBUG: Finished redout_handler\n"); // Add this
 }
 /*---------------------------------------------------------------------------*/
 void redin_handler(char *fname)
@@ -258,13 +255,13 @@ int fork_exec(DynArray_T oTokens, int is_background)
 		else
 		{
 			setpgid(pid, pid);
-			// Add to background process list
 			if (bg_list.count < MAX_BG_PRO)
 			{
+				fflush(stdout);
+
 				bg_list.processes[bg_list.count].pid = pid;
 				bg_list.processes[bg_list.count].pgid = pid;
 				bg_list.processes[bg_list.count].status = BG_PROCESS_RUNNING;
-				// Save command string
 				bg_list.processes[bg_list.count].cmd = strdup(cmd.args[0]);
 				bg_list.count++;
 				total_bg_cnt++;
@@ -435,7 +432,40 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 	}
 	else
 	{
-		total_bg_cnt += cmd_count;
+		for (i = 0; i < cmd_count; i++)
+		{
+			if (bg_list.count < MAX_BG_PRO)
+			{
+				// Add each process in the pipeline to bg_list
+				bg_list.processes[bg_list.count].pid = child_pids[i];
+				bg_list.processes[bg_list.count].pgid = pgid; // Use the same pgid for all
+				bg_list.processes[bg_list.count].status = BG_PROCESS_RUNNING;
+
+				// Get command for this process
+				struct CommandInfo cmd = {0};
+				int token_start_pos = 0;
+				int pipe_count = 0;
+				for (int j = 0; j < dynarray_get_length(oTokens); j++)
+				{
+					struct Token *t = dynarray_get(oTokens, j);
+					if (t->token_type == TOKEN_PIPE)
+					{
+						if (pipe_count == i)
+						{
+							break;
+						}
+						token_start_pos = j + 1;
+						pipe_count++;
+					}
+				}
+				build_command_partial(oTokens, token_start_pos, token_end, &cmd);
+				bg_list.processes[bg_list.count].cmd = strdup(cmd.args[0]);
+				free(cmd.args);
+
+				bg_list.count++;
+				total_bg_cnt++;
+			}
+		}
 	}
 
 	// Restore original signal mask

@@ -82,30 +82,45 @@ static void sigzombie_handler(int signo)
     {
         while ((pid = waitpid(-1, &status, WNOHANG)) > 0)
         {
+            pid_t current_pgid = -1;
+            
+            // Find the process's pgid
             for (int i = 0; i < bg_list.count; i++)
             {
                 if (bg_list.processes[i].pid == pid)
                 {
-                    if (WIFEXITED(status) || WIFSIGNALED(status))
+                    current_pgid = bg_list.processes[i].pgid;
+                    
+                    // Remove this process from the list
+                    free(bg_list.processes[i].cmd);
+                    for (int j = i; j < bg_list.count - 1; j++)
                     {
-                        // Process has terminated
-                        printf("[%d] Done\t%s\n",
-                               bg_list.processes[i].pid,
-                               bg_list.processes[i].cmd);
-
-                        // Clean up
-                        free(bg_list.processes[i].cmd);
-
-                        // Remove from list by shifting remaining entries
-                        for (int j = i; j < bg_list.count - 1; j++)
-                        {
-                            bg_list.processes[j] = bg_list.processes[j + 1];
-                        }
-                        bg_list.count--;
-                        if (total_bg_cnt > 0)
-                            total_bg_cnt--;
+                        bg_list.processes[j] = bg_list.processes[j + 1];
                     }
+                    bg_list.count--;
+                    if (total_bg_cnt > 0)
+                        total_bg_cnt--;
                     break;
+                }
+            }
+            
+            // Check if this was the last process in the group
+            if (current_pgid != -1)
+            {
+                int remaining = 0;
+                for (int i = 0; i < bg_list.count; i++)
+                {
+                    if (bg_list.processes[i].pgid == current_pgid)
+                    {
+                        remaining++;
+                    }
+                }
+                
+                // Only print Done message if this was the last process in the group
+                if (remaining == 0)
+                {
+                    printf("[%d] Done background process group\n", current_pgid);
+                    fflush(stdout);
                 }
             }
         }
@@ -174,7 +189,7 @@ static void shell_helper(const char *in_line)
                 if (ret_pgid > 0)
                 {
                     if (is_background == 1)
-                        printf("[%d] Background process group running\n",
+                        printf("[%d] Background process running\n",
                                ret_pgid);
                 }
                 else
