@@ -83,14 +83,14 @@ static void sigzombie_handler(int signo)
         while ((pid = waitpid(-1, &status, WNOHANG)) > 0)
         {
             pid_t current_pgid = -1;
-            
+
             // Find the process's pgid
             for (int i = 0; i < bg_list.count; i++)
             {
                 if (bg_list.processes[i].pid == pid)
                 {
                     current_pgid = bg_list.processes[i].pgid;
-                    
+
                     // Remove this process from the list
                     free(bg_list.processes[i].cmd);
                     for (int j = i; j < bg_list.count - 1; j++)
@@ -103,7 +103,7 @@ static void sigzombie_handler(int signo)
                     break;
                 }
             }
-            
+
             // Check if this was the last process in the group
             if (current_pgid != -1)
             {
@@ -115,7 +115,7 @@ static void sigzombie_handler(int signo)
                         remaining++;
                     }
                 }
-                
+
                 // Only print Done message if this was the last process in the group
                 if (remaining == 0)
                 {
@@ -169,7 +169,9 @@ static void shell_helper(const char *in_line)
                 {
                     if (total_bg_cnt + pcount + 1 > MAX_BG_PRO)
                     {
-                        printf("Program exceeds the maximum number of the background processes\n");
+                        printf("Error: Total background processes "
+                               "exceed the limit (%d).\n",
+                               MAX_BG_PRO);
                         return;
                     }
                 }
