@@ -28,6 +28,7 @@ void redin_handler(char *fname);
 struct CommandInfo
 {
     char *redirect_out; // File for output redirection
+    char *redirect_in;  // File for input redirection
     int cnt;            // Number of arguments
     char **args;        // Dynamic array of argument pointers
 };

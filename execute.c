@@ -52,11 +52,12 @@ void redin_handler(char *fname)
 
 int build_command_partial(DynArray_T oTokens, int start, int end, struct CommandInfo *cmd)
 {
-	int i, redout = FALSE; // Removed unused redin variable
+	int i, redout = FALSE, redin = FALSE;
 	struct Token *t;
 
 	cmd->cnt = 0;
 	cmd->redirect_out = NULL;
+	cmd->redirect_in = NULL; // Add this field to CommandInfo struct
 
 	// First pass to count arguments
 	int arg_count = 0;
@@ -65,15 +66,20 @@ int build_command_partial(DynArray_T oTokens, int start, int end, struct Command
 		t = dynarray_get(oTokens, i);
 		if (t->token_type == TOKEN_WORD)
 		{
-			if (!(redout == TRUE))
+			if (!(redout == TRUE || redin == TRUE))
 			{
 				arg_count++;
 			}
 			redout = FALSE;
+			redin = FALSE;
 		}
 		else if (t->token_type == TOKEN_REDOUT)
 		{
 			redout = TRUE;
+		}
+		else if (t->token_type == TOKEN_REDIN)
+		{
+			redin = TRUE;
 		}
 	}
 
@@ -86,6 +92,7 @@ int build_command_partial(DynArray_T oTokens, int start, int end, struct Command
 
 	// Reset flags for second pass
 	redout = FALSE;
+	redin = FALSE;
 
 	// Second pass to fill in arguments
 	for (i = start; i < end; i++)
@@ -99,6 +106,11 @@ int build_command_partial(DynArray_T oTokens, int start, int end, struct Command
 				cmd->redirect_out = t->token_value;
 				redout = FALSE;
 			}
+			else if (redin == TRUE)
+			{
+				cmd->redirect_in = t->token_value;
+				redin = FALSE;
+			}
 			else
 			{
 				cmd->args[cmd->cnt++] = t->token_value;
@@ -107,6 +119,10 @@ int build_command_partial(DynArray_T oTokens, int start, int end, struct Command
 		else if (t->token_type == TOKEN_REDOUT)
 		{
 			redout = TRUE;
+		}
+		else if (t->token_type == TOKEN_REDIN)
+		{
+			redin = TRUE;
 		}
 	}
 	cmd->args[cmd->cnt] = NULL;
@@ -216,6 +232,25 @@ int fork_exec(DynArray_T oTokens, int is_background)
 	{ // Child process
 		signal(SIGINT, SIG_DFL);
 		setpgid(0, 0); // Create new process group
+
+		if (cmd.redirect_in != NULL)
+		{
+			int fd = open(cmd.redirect_in, O_RDONLY);
+			if (fd < 0)
+			{
+				error_print(NULL, PERROR);
+				free(cmd.args);
+				exit(EXIT_FAILURE);
+			}
+			if (dup2(fd, STDIN_FILENO) < 0)
+			{
+				error_print(NULL, PERROR);
+				close(fd);
+				free(cmd.args);
+				exit(EXIT_FAILURE);
+			}
+			close(fd);
+		}
 
 		if (cmd.redirect_out != NULL)
 		{
