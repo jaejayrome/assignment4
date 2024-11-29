@@ -253,35 +253,47 @@ int main(int argc, char *argv[])
 
     /* Initialize variables for background processes */
     total_bg_cnt = 0;
-
-    /*
-        //
-        // TODO-start: Initializing in snush.c
-        //
-
-
-         You should initialize or allocate your own global variables
-        for handling background processes
-
-        //
-        // TODO-end: Initializing in snush.c
-        //
-
-    */
     memset(&bg_list, 0, sizeof(struct BgProcessList));
     bg_messages_pending = 0;
 
+    /* Set up signal handling */
     sigemptyset(&sigset);
     sigaddset(&sigset, SIGINT);
     sigaddset(&sigset, SIGCHLD);
     sigaddset(&sigset, SIGQUIT);
+    sigaddset(&sigset, SIGTSTP);
+    sigaddset(&sigset, SIGTTOU);
     sigprocmask(SIG_UNBLOCK, &sigset, NULL);
 
-    /* Register signal handler */
-    signal(SIGINT, SIG_IGN);
-    signal(SIGCHLD, sigzombie_handler);
-    signal(SIGQUIT, SIG_IGN);
-    signal(SIGTSTP, SIG_IGN);
+    /* Register signal handlers using sigaction */
+    struct sigaction sa;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    // SIGINT handler
+    sa.sa_handler = SIG_IGN;
+    sigaction(SIGINT, &sa, NULL);
+
+    // SIGCHLD handler
+    sa.sa_handler = sigzombie_handler;
+    sigaction(SIGCHLD, &sa, NULL);
+
+    // SIGQUIT handler
+    sa.sa_handler = SIG_IGN;
+    sigaction(SIGQUIT, &sa, NULL);
+
+    // SIGTSTP handler - ignore Ctrl+Z for the shell
+    sa.sa_handler = SIG_IGN;
+    sigaction(SIGTSTP, &sa, NULL);
+
+    // SIGTTOU handler
+    sa.sa_handler = SIG_IGN;
+    sigaction(SIGTTOU, &sa, NULL);
+
+    // Make sure the shell is in its own process group and has control of the terminal
+    pid_t shell_pgid = getpid();
+    setpgid(shell_pgid, shell_pgid);
+    tcsetpgrp(STDIN_FILENO, shell_pgid);
 
     error_print(argv[0], SETUP);
 
@@ -291,8 +303,16 @@ int main(int argc, char *argv[])
         fprintf(stdout, "%% ");
         fflush(stdout);
 
+        // Make sure shell has terminal control before reading input
+        tcsetpgrp(STDIN_FILENO, getpgrp());
+
         if (fgets(c_line, MAX_LINE_SIZE, stdin) == NULL)
         {
+            if (errno == EINTR)
+            {
+                clearerr(stdin);
+                continue;
+            }
             printf("\n");
             exit(EXIT_SUCCESS);
         }

@@ -214,9 +214,24 @@ int fork_exec(DynArray_T oTokens, int is_background)
 	int status;
 	struct CommandInfo cmd = {0};
 
+	// Block SIGINT during fork
+	sigset_t mask, old_mask;
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGINT);
+	sigprocmask(SIG_BLOCK, &mask, &old_mask);
+
+	// Save current SIGINT handler
+	struct sigaction new_action, old_action;
+	sigemptyset(&new_action.sa_mask);
+	new_action.sa_handler = SIG_IGN;
+	new_action.sa_flags = 0;
+	sigaction(SIGINT, &new_action, &old_action);
+
 	if (build_command_partial(oTokens, 0, dynarray_get_length(oTokens), &cmd) < 0)
 	{
 		error_print("Memory allocation failed", FPRINTF);
+		sigaction(SIGINT, &old_action, NULL);
+		sigprocmask(SIG_SETMASK, &old_mask, NULL);
 		return -1;
 	}
 
@@ -225,50 +240,41 @@ int fork_exec(DynArray_T oTokens, int is_background)
 	{
 		free(cmd.args);
 		error_print(NULL, PERROR);
+		sigaction(SIGINT, &old_action, NULL);
+		sigprocmask(SIG_SETMASK, &old_mask, NULL);
 		return -1;
 	}
 
 	if (pid == 0)
 	{ // Child process
-		signal(SIGINT, SIG_DFL);
-		setpgid(0, 0); // Create new process group
+		struct sigaction sa;
+		sigemptyset(&sa.sa_mask);
+		sa.sa_flags = 0;
+		sa.sa_handler = SIG_DFL;
+
+		sigaction(SIGINT, &sa, NULL);
+		sigaction(SIGQUIT, &sa, NULL);
+		sigaction(SIGTSTP, &sa, NULL);
+		sigaction(SIGTTIN, &sa, NULL);
+		sigaction(SIGTTOU, &sa, NULL);
+		sigaction(SIGCHLD, &sa, NULL);
+
+		// Unblock all signals
+		sigset_t mask;
+		sigemptyset(&mask);
+		sigprocmask(SIG_SETMASK, &mask, NULL);
+
+		// Create new process group
+		setpgid(0, 0);
 
 		if (cmd.redirect_in != NULL)
 		{
-			int fd = open(cmd.redirect_in, O_RDONLY);
-			if (fd < 0)
-			{
-				error_print(NULL, PERROR);
-				free(cmd.args);
-				exit(EXIT_FAILURE);
-			}
-			if (dup2(fd, STDIN_FILENO) < 0)
-			{
-				error_print(NULL, PERROR);
-				close(fd);
-				free(cmd.args);
-				exit(EXIT_FAILURE);
-			}
-			close(fd);
+			redin_handler(cmd.redirect_in);
 		}
 
 		if (cmd.redirect_out != NULL)
 		{
-			int fd = open(cmd.redirect_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-			if (fd < 0)
-			{
-				error_print(NULL, PERROR);
-				free(cmd.args);
-				exit(EXIT_FAILURE);
-			}
-			if (dup2(fd, STDOUT_FILENO) < 0)
-			{
-				error_print(NULL, PERROR);
-				close(fd);
-				free(cmd.args);
-				exit(EXIT_FAILURE);
-			}
-			close(fd);
+			redout_handler(cmd.redirect_out);
 		}
 
 		execvp(cmd.args[0], cmd.args);
@@ -277,23 +283,33 @@ int fork_exec(DynArray_T oTokens, int is_background)
 		exit(EXIT_FAILURE);
 	}
 	else
-	{ // Parent process in fork_exec()
+	{ // Parent process
+		setpgid(pid, pid);
+
 		if (!is_background)
 		{
+			// Give terminal control to child
+			tcsetpgrp(STDIN_FILENO, pid);
+
+			// Restore original signal mask before waiting
+			sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
 			if (waitpid(pid, &status, 0) < 0)
 			{
 				error_print(NULL, PERROR);
 				free(cmd.args);
+				sigaction(SIGINT, &old_action, NULL);
 				return -1;
 			}
+
+			// Restore terminal control to shell
+			tcsetpgrp(STDIN_FILENO, getpgrp());
 		}
 		else
 		{
-			setpgid(pid, pid);
 			if (bg_list.count < MAX_BG_PRO)
 			{
 				fflush(stdout);
-
 				bg_list.processes[bg_list.count].pid = pid;
 				bg_list.processes[bg_list.count].pgid = pid;
 				bg_list.processes[bg_list.count].status = BG_PROCESS_RUNNING;
@@ -303,9 +319,13 @@ int fork_exec(DynArray_T oTokens, int is_background)
 			}
 		}
 		free(cmd.args);
-		return pid;
 	}
-	return -1;
+
+	// Restore original signal handlers
+	sigaction(SIGINT, &old_action, NULL);
+	sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
+	return pid;
 }
 /*---------------------------------------------------------------------------*/
 /* Important Notice!!
@@ -322,15 +342,22 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 	int pgid = -1;
 	pid_t child_pids[MAX_FG_PRO];
 
-	// Block SIGTTOU while setting up terminal control
+	// Block SIGTTOU and SIGINT while setting up processes
 	sigset_t mask, old_mask;
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGTTOU);
+	sigaddset(&mask, SIGINT); // Block SIGINT during setup
 	sigprocmask(SIG_BLOCK, &mask, &old_mask);
+
+	// Temporarily install SIGINT handler for parent
+	struct sigaction new_action, old_action;
+	sigemptyset(&new_action.sa_mask);
+	new_action.sa_handler = SIG_IGN;
+	new_action.sa_flags = 0;
+	sigaction(SIGINT, &new_action, &old_action);
 
 	for (i = 0; i < cmd_count; i++)
 	{
-		// Find the range of tokens for this command
 		token_start = token_idx;
 		while (token_idx < dynarray_get_length(oTokens))
 		{
@@ -342,7 +369,6 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 		token_end = token_idx;
 		token_idx++;
 
-		// Create pipe for all but the last command
 		if (i < cmd_count - 1)
 		{
 			if (pipe(pipe_fds) < 0)
@@ -353,6 +379,7 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 					kill(child_pids[j], SIGTERM);
 				}
 				sigprocmask(SIG_SETMASK, &old_mask, NULL);
+				sigaction(SIGINT, &old_action, NULL);
 				return -1;
 			}
 		}
@@ -367,17 +394,29 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 				kill(child_pids[j], SIGTERM);
 			}
 			sigprocmask(SIG_SETMASK, &old_mask, NULL);
+			sigaction(SIGINT, &old_action, NULL);
 			return -1;
 		}
 
 		if (pid == 0)
 		{ // Child process
-			sigprocmask(SIG_SETMASK, &old_mask, NULL);
-			signal(SIGINT, SIG_DFL);
-			signal(SIGQUIT, SIG_DFL);
-			signal(SIGTSTP, SIG_DFL);
-			signal(SIGTTIN, SIG_DFL);
-			signal(SIGTTOU, SIG_DFL);
+		  // Restore original signal mask and handlers in child
+			struct sigaction sa;
+			sigemptyset(&sa.sa_mask);
+			sa.sa_flags = 0;
+			sa.sa_handler = SIG_DFL;
+
+			sigaction(SIGINT, &sa, NULL);
+			sigaction(SIGQUIT, &sa, NULL);
+			sigaction(SIGTSTP, &sa, NULL);
+			sigaction(SIGTTIN, &sa, NULL);
+			sigaction(SIGTTOU, &sa, NULL);
+			sigaction(SIGCHLD, &sa, NULL);
+
+			// Unblock all signals
+			sigset_t mask;
+			sigemptyset(&mask);
+			sigprocmask(SIG_SETMASK, &mask, NULL);
 
 			if (pgid == -1)
 			{
@@ -385,14 +424,12 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 			}
 			setpgid(0, pgid);
 
-			// Set up input from previous pipe if it exists
 			if (prev_pipe_read != -1)
 			{
 				dup2(prev_pipe_read, STDIN_FILENO);
 				close(prev_pipe_read);
 			}
 
-			// Set up output to next pipe if not last command
 			if (i < cmd_count - 1)
 			{
 				close(pipe_fds[0]);
@@ -413,27 +450,24 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 				exit(EXIT_FAILURE);
 			}
 
-			// Handle redirection only for the last command in the pipeline
-			if (i == cmd_count - 1)
+			// Handle redirection for last command
+			if (i == cmd_count - 1 && cmd.redirect_out != NULL)
 			{
-				if (cmd.redirect_out != NULL)
+				int fd = open(cmd.redirect_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+				if (fd < 0)
 				{
-					int fd = open(cmd.redirect_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-					if (fd < 0)
-					{
-						error_print(NULL, PERROR);
-						free(cmd.args);
-						exit(EXIT_FAILURE);
-					}
-					if (dup2(fd, STDOUT_FILENO) < 0)
-					{
-						error_print(NULL, PERROR);
-						close(fd);
-						free(cmd.args);
-						exit(EXIT_FAILURE);
-					}
-					close(fd);
+					error_print(NULL, PERROR);
+					free(cmd.args);
+					exit(EXIT_FAILURE);
 				}
+				if (dup2(fd, STDOUT_FILENO) < 0)
+				{
+					error_print(NULL, PERROR);
+					close(fd);
+					free(cmd.args);
+					exit(EXIT_FAILURE);
+				}
+				close(fd);
 			}
 
 			execvp(cmd.args[0], cmd.args);
@@ -452,6 +486,7 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 			}
 			setpgid(pid, pgid);
 
+			// Give terminal control to the process group if foreground
 			if (!is_background && i == 0)
 			{
 				tcsetpgrp(STDIN_FILENO, pgid);
@@ -474,6 +509,10 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 	if (!is_background)
 	{
 		int status;
+
+		// Restore original signal handling before waiting
+		sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
 		for (i = 0; i < cmd_count; i++)
 		{
 			if (waitpid(child_pids[i], &status, 0) < 0)
@@ -481,16 +520,18 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 				if (errno != ECHILD)
 				{
 					error_print(NULL, PERROR);
-					sigprocmask(SIG_SETMASK, &old_mask, NULL);
+					sigaction(SIGINT, &old_action, NULL);
 					return -1;
 				}
 			}
 		}
+
+		// Restore terminal control to shell
 		tcsetpgrp(STDIN_FILENO, getpgrp());
 	}
 	else
 	{
-		// Handle background processes
+		// Background process handling remains the same
 		for (i = 0; i < cmd_count; i++)
 		{
 			if (bg_list.count < MAX_BG_PRO)
@@ -510,7 +551,10 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 		}
 	}
 
+	// Restore original signal handlers
+	sigaction(SIGINT, &old_action, NULL);
 	sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
 	return first_child_pid;
 }
 /*---------------------------------------------------------------------------*/
