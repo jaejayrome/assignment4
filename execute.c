@@ -330,6 +330,7 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 
 	for (i = 0; i < cmd_count; i++)
 	{
+		// Find the range of tokens for this command
 		token_start = token_idx;
 		while (token_idx < dynarray_get_length(oTokens))
 		{
@@ -341,6 +342,7 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 		token_end = token_idx;
 		token_idx++;
 
+		// Create pipe for all but the last command
 		if (i < cmd_count - 1)
 		{
 			if (pipe(pipe_fds) < 0)
@@ -370,10 +372,7 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 
 		if (pid == 0)
 		{ // Child process
-			// Restore original signal mask in child
 			sigprocmask(SIG_SETMASK, &old_mask, NULL);
-
-			// Reset signal handlers
 			signal(SIGINT, SIG_DFL);
 			signal(SIGQUIT, SIG_DFL);
 			signal(SIGTSTP, SIG_DFL);
@@ -386,12 +385,14 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 			}
 			setpgid(0, pgid);
 
+			// Set up input from previous pipe if it exists
 			if (prev_pipe_read != -1)
 			{
 				dup2(prev_pipe_read, STDIN_FILENO);
 				close(prev_pipe_read);
 			}
 
+			// Set up output to next pipe if not last command
 			if (i < cmd_count - 1)
 			{
 				close(pipe_fds[0]);
@@ -399,6 +400,7 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 				close(pipe_fds[1]);
 			}
 
+			// Close all other file descriptors
 			for (int j = 3; j < 256; j++)
 			{
 				close(j);
@@ -409,6 +411,29 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 			{
 				error_print("Command building failed", FPRINTF);
 				exit(EXIT_FAILURE);
+			}
+
+			// Handle redirection only for the last command in the pipeline
+			if (i == cmd_count - 1)
+			{
+				if (cmd.redirect_out != NULL)
+				{
+					int fd = open(cmd.redirect_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+					if (fd < 0)
+					{
+						error_print(NULL, PERROR);
+						free(cmd.args);
+						exit(EXIT_FAILURE);
+					}
+					if (dup2(fd, STDOUT_FILENO) < 0)
+					{
+						error_print(NULL, PERROR);
+						close(fd);
+						free(cmd.args);
+						exit(EXIT_FAILURE);
+					}
+					close(fd);
+				}
 			}
 
 			execvp(cmd.args[0], cmd.args);
@@ -429,7 +454,6 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 
 			if (!is_background && i == 0)
 			{
-				// Set process group as foreground
 				tcsetpgrp(STDIN_FILENO, pgid);
 			}
 
@@ -446,13 +470,13 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 		}
 	}
 
+	// Parent process cleanup and waiting
 	if (!is_background)
 	{
 		int status;
 		for (i = 0; i < cmd_count; i++)
 		{
-			pid_t waited_pid = waitpid(child_pids[i], &status, 0);
-			if (waited_pid < 0)
+			if (waitpid(child_pids[i], &status, 0) < 0)
 			{
 				if (errno != ECHILD)
 				{
@@ -462,38 +486,21 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 				}
 			}
 		}
-		// Return terminal control to shell
 		tcsetpgrp(STDIN_FILENO, getpgrp());
 	}
 	else
 	{
+		// Handle background processes
 		for (i = 0; i < cmd_count; i++)
 		{
 			if (bg_list.count < MAX_BG_PRO)
 			{
-				// Add each process in the pipeline to bg_list
 				bg_list.processes[bg_list.count].pid = child_pids[i];
-				bg_list.processes[bg_list.count].pgid = pgid; // Use the same pgid for all
+				bg_list.processes[bg_list.count].pgid = pgid;
 				bg_list.processes[bg_list.count].status = BG_PROCESS_RUNNING;
 
-				// Get command for this process
 				struct CommandInfo cmd = {0};
-				int token_start_pos = 0;
-				int pipe_count = 0;
-				for (int j = 0; j < dynarray_get_length(oTokens); j++)
-				{
-					struct Token *t = dynarray_get(oTokens, j);
-					if (t->token_type == TOKEN_PIPE)
-					{
-						if (pipe_count == i)
-						{
-							break;
-						}
-						token_start_pos = j + 1;
-						pipe_count++;
-					}
-				}
-				build_command_partial(oTokens, token_start_pos, token_end, &cmd);
+				build_command_partial(oTokens, token_start, token_end, &cmd);
 				bg_list.processes[bg_list.count].cmd = strdup(cmd.args[0]);
 				free(cmd.args);
 
@@ -503,7 +510,6 @@ int iter_pipe_fork_exec(int pcount, DynArray_T oTokens, int is_background)
 		}
 	}
 
-	// Restore original signal mask
 	sigprocmask(SIG_SETMASK, &old_mask, NULL);
 	return first_child_pid;
 }
