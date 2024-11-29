@@ -24,8 +24,9 @@
 
 struct BgProcessList bg_list;
 int bg_messages_pending = 0;
-
+int bg_process_completed = 0;
 int total_bg_cnt;
+int prompt_needed = 1;
 
 /*---------------------------------------------------------------------------*/
 void cleanup()
@@ -42,34 +43,29 @@ void cleanup()
     bg_list.count = 0;
 }
 /*---------------------------------------------------------------------------*/
-void check_bg_status()
+void check_bg_status(void)
 {
-    if (bg_messages_pending > 0)
+    for (int i = 0; i < bg_list.completed_count; i++)
     {
-        for (int i = 0; i < bg_list.count; i++)
+        if (!bg_list.completed[i].printed)
         {
-            if (bg_list.processes[i].status == BG_PROCESS_DONE)
-            {
-                printf("[%d] Background process done\n", bg_list.processes[i].pgid);
-
-                // Remove this process from our tracking
-                if (bg_list.processes[i].cmd != NULL)
-                {
-                    free(bg_list.processes[i].cmd);
-                }
-
-                // Shift remaining processes left
-                for (int j = i; j < bg_list.count - 1; j++)
-                {
-                    bg_list.processes[j] = bg_list.processes[j + 1];
-                }
-
-                bg_list.count--;
-                bg_messages_pending--;
-                i--; // Adjust index since we removed an element
-            }
+            prompt_needed = 0;
+            printf("[%d] Done background process group\n", bg_list.completed[i].pgid);
+            bg_list.completed[i].printed = 1;
         }
     }
+
+    // Clean up the completed array
+    int new_count = 0;
+    for (int i = 0; i < bg_list.completed_count; i++)
+    {
+        if (!bg_list.completed[i].printed)
+        {
+            bg_list.completed[new_count] = bg_list.completed[i];
+            new_count++;
+        }
+    }
+    bg_list.completed_count = new_count;
 }
 /*---------------------------------------------------------------------------*/
 /* Whenever a child process terminates, this handler handles all zombies. */
@@ -104,7 +100,6 @@ static void sigzombie_handler(int signo)
                 }
             }
 
-            // Check if this was the last process in the group
             if (current_pgid != -1)
             {
                 int remaining = 0;
@@ -116,10 +111,12 @@ static void sigzombie_handler(int signo)
                     }
                 }
 
-                // Only print Done message if this was the last process in the group
-                if (remaining == 0)
+                if (remaining == 0 && bg_list.completed_count < MAX_BG_PRO)
                 {
-                    printf("[%d] Done background process group\n", current_pgid);
+                    bg_list.completed[bg_list.completed_count].pgid = current_pgid;
+                    bg_list.completed[bg_list.completed_count].printed = 0;
+                    bg_list.completed_count++;
+                    prompt_needed = 0; // Don't print prompt after completion
                 }
             }
         }
@@ -296,15 +293,20 @@ int main(int argc, char *argv[])
 
     error_print(argv[0], SETUP);
 
+    // Set stdout to be line buffered
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     while (1)
     {
-        check_bg_status();
-        fprintf(stdout, "%% ");
-        fflush(stdout);
-
-        // Make sure shell has terminal control before reading input
         tcsetpgrp(STDIN_FILENO, getpgrp());
 
+        if (prompt_needed)
+        {
+            fprintf(stdout, "%% ");
+            fflush(stdout);
+        }
+
+        // Read input
         if (fgets(c_line, MAX_LINE_SIZE, stdin) == NULL)
         {
             if (errno == EINTR)
@@ -315,6 +317,9 @@ int main(int argc, char *argv[])
             printf("\n");
             exit(EXIT_SUCCESS);
         }
+
+        check_bg_status();
+        prompt_needed = 1;
         shell_helper(c_line);
     }
 

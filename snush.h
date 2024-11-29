@@ -27,19 +27,7 @@
 #define MAX_BG_PRO 16
 #define MAX_FG_PRO 16
 extern int total_bg_cnt;
-
-/*
-        //
-        // TODO-start: data structures in snush.h
-        //
-
-        You can add your own data structures to manage the background processes
-        You can also add macros to manage background processes
-
-        //
-        // TODO-end: data structures in snush.h
-        //
-*/
+extern int prompt_needed;
 
 struct BgProcess
 {
@@ -48,12 +36,18 @@ struct BgProcess
         char *cmd;  // Command string for jobs display
         int status; // Process status
 };
+struct CompletedProcessGroup
+{
+        pid_t pgid;
+        int printed;
+};
 
-// Array to store background processes
 struct BgProcessList
 {
         struct BgProcess processes[MAX_BG_PRO];
-        int count; // Number of active background processes
+        struct CompletedProcessGroup completed[MAX_BG_PRO];
+        int count;
+        int completed_count;
 };
 
 extern struct BgProcessList bg_list;
