@@ -120,7 +120,6 @@ static void sigzombie_handler(int signo)
                 if (remaining == 0)
                 {
                     printf("[%d] Done background process group\n", current_pgid);
-                    fflush(stdout);
                 }
             }
         }
